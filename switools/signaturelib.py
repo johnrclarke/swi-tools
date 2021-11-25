@@ -3,6 +3,7 @@
 # that can be found in the LICENSE file.
 
 from __future__ import absolute_import, division, print_function
+
 import os
 
 SWI_SIG_FILE_NAME = 'swi-signature'
@@ -13,23 +14,17 @@ def getSigFileName( swiFile ):
       return SWIX_SIG_FILE_NAME
    return SWI_SIG_FILE_NAME
 
-def getOptimizations( swi, workDir ):
-   ret = os.system( "set -e; swi=$(readlink -f %s); cd %s; "
-                    "unzip -q -o $swi swimSqshMap" % ( swi, workDir ) )
-   if ret:
-      return None # legacy image
+def getOptimizations( swi ):
    optims = []
-   with open( "%s/swimSqshMap" % workDir ) as f:
-      for line in f:
-         optim, _ = line.split( "=", 1 )
+   if 'swimSqshMap' in swi.namelist():
+       for line in swi.read( 'swimSqshMap' ).splitlines():
+         optim, _ = line.decode().split( "=", 1 )
          optims.append( optim )
-   os.system( "rm %s/swimSqshMap" % workDir )
    return optims
 
 def extractSwadapt( swi, workDir ):
-   ret = os.system( "set -e; image=$(readlink -f %s); cd %s;"
-                    "unzip -o -q $image swadapt" % ( swi, workDir ) )
-   if ret:
-      print( "Error: '%s' does not contain the 'swadapt' utility" % swi )
-      shutil.rmtree( workDir )
-      sys.exit( -1 )
+   if 'swadapt' not in swi.namelist():
+       return False
+   swi.extract( 'swadapt', workDir )
+   os.chmod( '{}/swadapt'.format( workDir ), 0o755 )
+   return True

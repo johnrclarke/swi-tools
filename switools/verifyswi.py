@@ -9,9 +9,10 @@ import argparse
 import base64
 import binascii
 import os
-from pkg_resources import resource_string
-import shutil
 import zipfile
+import tempfile
+import subprocess
+from pkg_resources import resource_string
 from M2Crypto import X509
 
 from . import signaturelib
@@ -37,7 +38,7 @@ class SwiSignature:
       etc. """
       for line in sigFile:
          data = line.decode( "utf-8", "backslashreplace" ).split( ':' )
-         if ( len( data ) == 2 ):
+         if len( data ) == 2:
             if data[ 0 ] == 'Version':
                self.version = data[ 1 ].strip()
             elif data[ 0 ] == 'HashAlgorithm':
@@ -64,6 +65,7 @@ class VERIFY_SWI_RESULT:
    ERROR_CERT_MISMATCH = 8
    ERROR_INVALID_SIGNING_CERT = 9
    ERROR_INVALID_ROOT_CERT = 10
+   ERROR_MISSING_SWADAPT = 11
 
 VERIFY_SWI_MESSAGE = {
    VERIFY_SWI_RESULT.SUCCESS: "SWI/X verification successful.",
@@ -209,25 +211,23 @@ def verifySwi( swi, rootCA=ROOT_CA_FILE_NAME ):
 
 def verifyAllSwi( swi, rootCA=ROOT_CA_FILE_NAME ):
    # We will extract sub-images to /tmp to verify their signatures
-   workDir = "/tmp/verify-optims-%d" % os.getpid()
-   os.mkdir( workDir )
    finalRetCode = VERIFY_SWI_RESULT.SUCCESS
-
-   try:
+   with tempfile.TemporaryDirectory() as workDir, zipfile.ZipFile( swi ) as zf:
       # Make sure the image we got is a swi file
-      if ( not os.path.isfile( swi ) or
-           os.system( "set -e; image=$(readlink -f %s); cd %s;"
-                      "unzip -o -q $image version" % ( swi, workDir ) ) ):
+      if not os.path.isfile( swi ) or 'version' not in zf.namelist():
          return VERIFY_SWI_RESULT.ERROR_NOT_A_SWI
-      optims = signaturelib.getOptimizations( swi, workDir )
+      optims = signaturelib.getOptimizations( zf )
       # If image has multiple sub-images, verify each
-      if not ( optims is None or len( optims ) == 1 or "DEFAULT" in optims ):
+      if len( optims ) > 1 and "DEFAULT" not in optims:
          print( "Optimizations in %s: %s" % ( swi, " ".join( optims ) ) )
-         signaturelib.extractSwadapt( swi, workDir )
+         if not signaturelib.extractSwadapt( zf, workDir ):
+            print( "Error: '%s' does not contain the 'swadapt' utility" % swi )
+            return VERIFY_SWI_RESULT.ERROR_MISSING_SWADAPT
          for optim in optims:
             optimImage = "%s/%s.swi" % ( workDir, optim )
             # extract sub-image
-            os.system("%s/swadapt %s %s %s" % ( workDir, swi, optimImage, optim ) )
+            subprocess.check_call( [ '{}/swadapt'.format( workDir ), swi,
+                                     optimImage, optim ] )
             retCode = verifySwi( optimImage, rootCA )
             os.remove( optimImage )
             print( "%s: %s" % ( optim, VERIFY_SWI_MESSAGE[ retCode ] ) )
@@ -236,8 +236,6 @@ def verifyAllSwi( swi, rootCA=ROOT_CA_FILE_NAME ):
       # Finally check the container image (or legacy "one level" image)
       retCode = verifySwi( swi, rootCA )
       print( VERIFY_SWI_MESSAGE[ retCode ] )
-   finally:
-      shutil.rmtree( workDir )
 
    return finalRetCode
 
